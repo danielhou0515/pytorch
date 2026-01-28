@@ -18,7 +18,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Literal, NamedTuple, Optional, TYPE_CHECKING
+from typing import Any, Literal, NamedTuple, Optional, TYPE_CHECKING, Union
 
 import torch
 import torch.utils._pytree as pytree
@@ -461,6 +461,7 @@ class CodeGen:
         # Render each argument on its own line
         expanded_def: bool = False,
         record_func: bool = False,
+        node_info: Optional[Union[Callable[[Node], str], list[str]]] = None,
     ) -> PythonCode:
         free_vars: list[str] = []
         body: list[str] = []
@@ -650,6 +651,23 @@ class CodeGen:
             nonlocal prev_summary_str
 
             if node.op not in {"placeholder", "output"}:
+                node_info_str = ""
+                if node_info is not None:
+                    if callable(node_info):
+                        result = node_info(node)
+                        if result:
+                            node_info_str = f" {result}"
+                    elif isinstance(node_info, list):
+                        # It's a list of meta keys to include
+                        parts = []
+                        for key in node_info:
+                            if key in node.meta:
+                                parts.append(f"{key}: {node.meta[key]}")
+                        if parts:
+                            node_info_str = f" {', '.join(parts)}"
+                if node_info_str:
+                    node_info_str = f"#{node_info_str} "
+
                 annotation_str = ""
                 annotation = node.meta.get("custom", {})
                 annotation_trunc = {}
@@ -684,7 +702,7 @@ class CodeGen:
                     elif ac_graph_id is not None:
                         maybe_recompute_info = f" ac_graph_id: {str(ac_graph_id)}"
 
-                summary_str = f"\n{dim(f'#{annotation_str}{maybe_recompute_info} {stack_trace_str}')}\n"
+                summary_str = f"\n{dim(f'{node_info_str}#{annotation_str}{maybe_recompute_info} {stack_trace_str}')}\n"
 
                 if summary_str != prev_summary_str:
                     prev_summary_str = summary_str
@@ -1889,6 +1907,7 @@ class Graph:
         colored: bool = False,
         expanded_def: bool = False,
         record_func: bool = False,
+        node_info: Optional[Union[Callable[[Node], str], list[str]]] = None,
     ) -> PythonCode:
         """
         Turn this ``Graph`` into valid Python code.
@@ -1957,6 +1976,7 @@ class Graph:
                 colored=colored,
                 expanded_def=expanded_def,
                 record_func=record_func,
+                node_info=node_info,
             )
 
     def _python_code(
@@ -1970,6 +1990,7 @@ class Graph:
         colored: bool = False,
         expanded_def: bool = False,
         record_func: bool = False,
+        node_info: Optional[Union[Callable[[Node], str], list[str]]] = None,
     ) -> PythonCode:
         return self._codegen._gen_python_code(
             self.nodes,
@@ -1981,6 +2002,7 @@ class Graph:
             colored=colored,
             expanded_def=expanded_def,
             record_func=record_func,
+            node_info=node_info,
         )
 
     def __str__(self) -> str:
