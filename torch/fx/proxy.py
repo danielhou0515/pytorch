@@ -45,6 +45,47 @@ log = logging.getLogger(__name__)
 annotation_log = getArtifactLogger(__name__, "annotation")
 
 
+def _is_arbitrary_callable(obj: Any) -> bool:
+    """
+    Returns True if obj is an arbitrary callable (function, lambda, method, etc.)
+    that requires special tracing to handle. These cannot be symbolically traced
+    using the standard Proxy mechanism.
+    """
+    import functools
+    import types
+
+    return isinstance(
+        obj,
+        (
+            types.FunctionType,
+            types.MethodType,
+            types.BuiltinFunctionType,
+            types.BuiltinMethodType,
+            functools.partial,
+        ),
+    )
+
+
+def _find_arbitrary_callable(args: tuple, kwargs: dict) -> Any:
+    """
+    Recursively searches args and kwargs for any arbitrary callable.
+    Returns the first arbitrary callable found, or None if none exist.
+    """
+    found = None
+
+    def check(obj: Any) -> Any:
+        nonlocal found
+        if found is not None:
+            return obj
+        if _is_arbitrary_callable(obj):
+            found = obj
+        return obj
+
+    map_aggregate(args, check)
+    map_aggregate(kwargs, check)
+    return found
+
+
 @compatibility(is_backward_compatible=False)
 class Scope:
     """Scope object that records the module path and the module type
@@ -668,8 +709,14 @@ class Proxy:
             )
         else:
             if isinstance(orig_method, torch._ops.HigherOrderOperator):
-                # TODO: Define how to symbolically trace HigherOrderOperators
-                raise RuntimeError("Unable to symbolically trace HigherOrderOperators")
+                bad_callable = _find_arbitrary_callable(args, kwargs)
+                if bad_callable is not None:
+                    raise RuntimeError(
+                        f"Unable to symbolically trace the HigherOrderOperator "
+                        f"{orig_method._name} because it received an arbitrary "
+                        f"callable argument {bad_callable}. Use make_fx or dynamo "
+                        f"tracing instead."
+                    )
             return tracer.create_proxy(
                 "call_function",
                 orig_method,
